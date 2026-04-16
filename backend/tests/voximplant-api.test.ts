@@ -29,6 +29,9 @@ const mockClient = {
   Authentication: {
     addUserOneTimeLoginKey: vi.fn().mockResolvedValue({ key: 'one-time-xyz' }),
   },
+  Scenarios: {
+    startScenarios: vi.fn().mockResolvedValue({ callSessionHistoryId: 'vs-xyz' }),
+  },
   onReady: Promise.resolve(),
 };
 
@@ -136,5 +139,14 @@ describe('VoximplantAPI', () => {
     expect(mockClient.SmartQueue.sqStartSupervisorSession).toHaveBeenCalledWith(expect.objectContaining({
       callSessionId: 'cs-1', supervisorUserName: 'sup', mode: 'whisper',
     }));
+  });
+
+  it('startScenarios calls Scenarios.startScenarios', async () => {
+    const out = await api.startScenarios({ ruleId: 1, customData: '{"x":1}' });
+    expect(mockClient.Scenarios.startScenarios).toHaveBeenCalledWith(expect.objectContaining({
+      ruleId: 1,
+      customData: '{"x":1}',
+    }));
+    expect(out.callSessionHistoryId).toBe('vs-xyz');
   });
 });

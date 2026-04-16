@@ -168,6 +168,21 @@ export class VoximplantAPI {
       mode: params.mode,
     });
   }
+
+  async startScenarios(params: {
+    ruleId: number;
+    userId?: number;
+    customData?: string;
+    script?: string;
+  }): Promise<{ callSessionHistoryId: string }> {
+    const res = await this.client.Scenarios.startScenarios({
+      ruleId: params.ruleId,
+      userId: params.userId,
+      customData: params.customData,
+      script: params.script,
+    });
+    return { callSessionHistoryId: String(res.callSessionHistoryId ?? res.callSessionsIds ?? '') };
+  }
 }
 
 export const voximplantAPI = new VoximplantAPI();

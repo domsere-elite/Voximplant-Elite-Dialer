@@ -93,6 +93,7 @@ function createConfig() {
       applicationId: required('VOXIMPLANT_APPLICATION_ID'),
       applicationName: required('VOXIMPLANT_APPLICATION_NAME'),
       accountName: required('VOXIMPLANT_ACCOUNT_NAME'),
+      outboundAgentRuleId: optionalInt('VOXIMPLANT_OUTBOUND_AGENT_RULE_ID', 0),
     },
     webhook: {
       secret: required('VOXIMPLANT_WEBHOOK_SECRET'),
