@@ -99,28 +99,53 @@ export default function CampaignDetailClient() {
   const [error, setError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!id) return;
-    setError(null);
-    try {
+  const fetchDetail = useCallback(
+    async (): Promise<{ campaign: CampaignDetail; live: LiveMetrics | null }> => {
       const cRes = await api.get<CampaignDetail>(`/api/campaigns/${id}`);
-      setCampaign({
-        ...cRes.data,
-        breakdown: { ...EMPTY_BREAKDOWN, ...(cRes.data.breakdown ?? {}) }
-      });
-      // live-metrics endpoint is not yet implemented on the backend; tolerate absence.
       const lRes = await api
         .get<LiveMetrics>(`/api/campaigns/${id}/live-metrics`)
         .catch(() => ({ data: null as LiveMetrics | null }));
-      if (lRes.data) setLive(lRes.data);
+      return {
+        campaign: {
+          ...cRes.data,
+          breakdown: { ...EMPTY_BREAKDOWN, ...(cRes.data.breakdown ?? {}) }
+        },
+        live: lRes.data
+      };
+    },
+    [id]
+  );
+
+  const reload = useCallback(async () => {
+    if (!id) return;
+    setError(null);
+    try {
+      const { campaign: c, live: l } = await fetchDetail();
+      setCampaign(c);
+      if (l) setLive(l);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load campaign');
     }
-  }, [id]);
+  }, [id, fetchDetail]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!id) return;
+    let ignore = false;
+    setError(null);
+    fetchDetail()
+      .then(({ campaign: c, live: l }) => {
+        if (ignore) return;
+        setCampaign(c);
+        if (l) setLive(l);
+      })
+      .catch((e: unknown) => {
+        if (ignore) return;
+        setError(e instanceof Error ? e.message : 'Failed to load campaign');
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [id, fetchDetail]);
 
   useEffect(() => {
     if (!id) return;
@@ -156,7 +181,7 @@ export default function CampaignDetailClient() {
     try {
       const endpoint = action === 'resume' ? 'start' : action;
       await api.post(`/api/campaigns/${id}/${endpoint}`);
-      await load();
+      await reload();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : `Failed to ${action}`);
     } finally {
@@ -171,7 +196,7 @@ export default function CampaignDetailClient() {
           <span>{error}</span>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => void reload()}
             className="px-3 py-1 bg-red-600 text-white rounded text-sm"
           >
             Retry

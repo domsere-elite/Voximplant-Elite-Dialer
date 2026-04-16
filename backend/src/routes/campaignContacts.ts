@@ -31,6 +31,14 @@ const campaignContactRoutes: FastifyPluginAsync = async (app: FastifyInstance) =
       return reply.status(400).send({ error: 'invalid status' });
     }
 
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: req.params.id },
+      select: { id: true }
+    });
+    if (!campaign) {
+      return reply.status(404).send({ error: 'campaign not found' });
+    }
+
     const where: { campaignId: string; status?: ContactStatus } = {
       campaignId: req.params.id
     };

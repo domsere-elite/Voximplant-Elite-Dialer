@@ -3,6 +3,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 const { prismaMock } = vi.hoisted(() => {
   const prismaMock = {
+    campaign: {
+      findUnique: vi.fn()
+    },
     campaignContact: {
       findMany: vi.fn()
     }
@@ -78,6 +81,7 @@ const contactsFixture = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prismaMock.campaign.findUnique.mockResolvedValue({ id: 'c1' });
 });
 
 describe('campaign contacts routes', () => {
@@ -155,6 +159,18 @@ describe('campaign contacts routes', () => {
     expect(res.statusCode).toBe(200);
     const call = prismaMock.campaignContact.findMany.mock.calls[0][0];
     expect(call.take).toBe(100);
+  });
+
+  it('returns 404 when the campaign does not exist', async () => {
+    prismaMock.campaign.findUnique.mockResolvedValueOnce(null);
+    const app = await build();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/campaigns/missing/contacts',
+      headers: { authorization: 'Bearer x' }
+    });
+    expect(res.statusCode).toBe(404);
+    expect(prismaMock.campaignContact.findMany).not.toHaveBeenCalled();
   });
 
   it('requires authentication', async () => {

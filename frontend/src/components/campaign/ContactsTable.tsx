@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
 export type ContactStatusValue =
@@ -60,30 +60,31 @@ export function ContactsTable({ campaignId }: { campaignId: string }) {
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    let ignore = false;
     setRows(null);
     setError(null);
-    try {
-      const { data } = await api.get<CampaignContact[]>(
-        `/api/campaigns/${campaignId}/contacts`,
-        {
-          params: {
-            status: status === 'all' ? undefined : status,
-            limit: PAGE_SIZE + 1,
-            offset
-          }
+    api
+      .get<CampaignContact[]>(`/api/campaigns/${campaignId}/contacts`, {
+        params: {
+          status: status === 'all' ? undefined : status,
+          limit: PAGE_SIZE + 1,
+          offset
         }
-      );
-      setHasMore(data.length > PAGE_SIZE);
-      setRows(data.slice(0, PAGE_SIZE));
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load contacts');
-    }
+      })
+      .then(({ data }) => {
+        if (ignore) return;
+        setHasMore(data.length > PAGE_SIZE);
+        setRows(data.slice(0, PAGE_SIZE));
+      })
+      .catch((e: unknown) => {
+        if (ignore) return;
+        setError(e instanceof Error ? e.message : 'Failed to load contacts');
+      });
+    return () => {
+      ignore = true;
+    };
   }, [campaignId, status, offset]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   return (
     <div className="bg-white border rounded">
