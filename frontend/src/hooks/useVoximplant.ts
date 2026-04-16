@@ -71,8 +71,30 @@ export function useVoximplant(): UseVoximplantReturn {
   const [error, setError] = useState<string | null>(null);
 
   const clientRef = useRef<any>(null);
+  const clientListenersRef = useRef<Array<{ event: string; handler: (...args: any[]) => void }>>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+
+  function detachClientListeners() {
+    const client = clientRef.current;
+    if (client?.off) {
+      for (const { event, handler } of clientListenersRef.current) {
+        try {
+          client.off(event, handler);
+        } catch {
+          /* swallow */
+        }
+      }
+    }
+    clientListenersRef.current = [];
+  }
+
+  function registerClientListener(event: string, handler: (...args: any[]) => void) {
+    const client = clientRef.current;
+    if (!client) return;
+    client.on(event, handler);
+    clientListenersRef.current.push({ event, handler });
+  }
 
   function stopTimer() {
     if (timerRef.current) {
@@ -119,6 +141,9 @@ export function useVoximplant(): UseVoximplantReturn {
     if (!voximplantUser) return;
     const client = (VoxImplant as any).getInstance();
     clientRef.current = client;
+    // Singleton client may already have our handlers attached from a prior
+    // mount (StrictMode, HMR, logout/login). Remove them before re-attaching.
+    detachClientListeners();
     setSdkState('connecting');
     setError(null);
 
@@ -160,9 +185,9 @@ export function useVoximplant(): UseVoximplantReturn {
         }
       };
 
-      client.on(Events.ConnectionEstablished || 'ConnectionEstablished', onEstablished);
-      client.on(Events.ConnectionFailed || 'ConnectionFailed', onConnectionFailed);
-      client.on(Events.IncomingCall || 'IncomingCall', onIncoming);
+      registerClientListener(Events.ConnectionEstablished || 'ConnectionEstablished', onEstablished);
+      registerClientListener(Events.ConnectionFailed || 'ConnectionFailed', onConnectionFailed);
+      registerClientListener(Events.IncomingCall || 'IncomingCall', onIncoming);
     } catch (err: any) {
       setSdkState('error');
       setError(err?.message || 'SDK init failed');
@@ -171,6 +196,7 @@ export function useVoximplant(): UseVoximplantReturn {
 
   const disconnect = useCallback(async () => {
     stopTimer();
+    detachClientListeners();
     const client = clientRef.current;
     if (client?.disconnect) {
       try {
@@ -180,6 +206,12 @@ export function useVoximplant(): UseVoximplantReturn {
       }
     }
     setSdkState('disconnected');
+    setCallState('idle');
+    setCurrentCall(null);
+    setMuted(false);
+    setOnHold(false);
+    setDurationSeconds(0);
+    setError(null);
   }, []);
 
   const setStatus = useCallback(async (status: AgentStatus) => {
@@ -197,6 +229,7 @@ export function useVoximplant(): UseVoximplantReturn {
         video: false,
         customData: JSON.stringify(customData ?? { autoAnswer: false })
       });
+      if (!call) return null;
       setCurrentCall(call);
       setCallState('ringing');
       attachCallEvents(call);
