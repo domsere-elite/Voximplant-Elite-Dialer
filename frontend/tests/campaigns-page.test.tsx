@@ -1,7 +1,8 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-let authState: any = { user: { id: 'u1', email: 'a@b.com', role: 'supervisor' } };
+type TestAuthState = { user: { id: string; email: string; role: 'rep' | 'supervisor' | 'admin' } };
+let authState: TestAuthState = { user: { id: 'u1', email: 'a@b.com', role: 'supervisor' } };
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState }));
 
 const { apiGet } = vi.hoisted(() => ({ apiGet: vi.fn() }));
