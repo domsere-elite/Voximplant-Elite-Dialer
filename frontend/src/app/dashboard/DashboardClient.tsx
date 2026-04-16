@@ -91,6 +91,8 @@ export default function DashboardClient() {
     setDialing(true);
     try {
       await api.post('/api/calls/dial', { crmAccountId: c.crm_account_id, phone: c.phone });
+    } catch (err) {
+      console.error('dial failed', err);
     } finally {
       setDialing(false);
     }
@@ -208,6 +210,7 @@ export default function DashboardClient() {
               <Link
                 href={`${CRM_URL}/work/${realtime.previewContact.crm_account_id}`}
                 target="_blank"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm"
               >
                 <ExternalLink className="h-4 w-4" /> Open in CRM
@@ -230,6 +233,7 @@ export default function DashboardClient() {
             <Link
               href={`${CRM_URL}/work/${realtime.activeCall.crm_account_id}`}
               target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium"
             >
               <ExternalLink className="h-4 w-4" /> Open Full Account in CRM
