@@ -48,9 +48,9 @@ export function WrapUpModal({ callId, open, onClose, onSubmitted }: Props) {
     setError(null);
     try {
       await api.post(`/api/calls/${callId}/disposition`, {
-        disposition_code: dispositionCode,
+        dispositionCode,
         notes: notes || undefined,
-        callback_at: callbackAt || undefined
+        callbackAt: callbackAt || undefined
       });
       onSubmitted?.();
       onClose();

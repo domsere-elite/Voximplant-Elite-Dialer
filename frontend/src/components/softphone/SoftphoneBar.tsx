@@ -36,16 +36,19 @@ export function SoftphoneBar() {
   }, [realtime.statusChange]);
 
   async function handleStatusChange(next: AgentStatus) {
+    const prev = status;
     setLocalStatus(next);
     try {
       await api.patch('/api/agents/me/status', { status: next });
     } catch (err) {
-      /* swallow; surfaced via toast elsewhere */
+      console.error('status PATCH failed', err);
+      setLocalStatus(prev);
+      return;
     }
     try {
       await vox.setStatus(next);
-    } catch {
-      /* swallow */
+    } catch (err) {
+      console.error('voximplant setStatus failed', err);
     }
   }
 

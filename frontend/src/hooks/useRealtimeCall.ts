@@ -22,10 +22,12 @@ export function useRealtimeCall() {
   useEffect(() => {
     const offIncoming = on<IncomingCallEvent>('call:incoming', (payload) => {
       setIncomingCall(payload);
+      setLastOutcome(null);
     });
     const offConnected = on<CallConnectedEvent>('call:connected', (payload) => {
       setActiveCall(payload);
       setIncomingCall(null);
+      setLastOutcome(null);
     });
     const offEnded = on<CallEndedEvent>('call:ended', (payload) => {
       setLastOutcome(payload);
