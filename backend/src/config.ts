@@ -94,6 +94,9 @@ function createConfig() {
       applicationName: required('VOXIMPLANT_APPLICATION_NAME'),
       accountName: required('VOXIMPLANT_ACCOUNT_NAME'),
     },
+    webhook: {
+      secret: required('VOXIMPLANT_WEBHOOK_SECRET'),
+    },
     crm: {
       baseUrl: required('CRM_BASE_URL'),
       apiKey: required('CRM_API_KEY'),
@@ -122,6 +125,11 @@ function getConfig() {
     cachedConfig = createConfig();
   }
   return cachedConfig;
+}
+
+/** Clears the cached config — for use in tests only. */
+export function resetConfig(): void {
+  cachedConfig = null;
 }
 
 export const config = new Proxy({} as ReturnType<typeof createConfig>, {

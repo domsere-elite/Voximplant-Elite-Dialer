@@ -10,3 +10,4 @@ process.env.VOXIMPLANT_APPLICATION_NAME = process.env.VOXIMPLANT_APPLICATION_NAM
 process.env.VOXIMPLANT_ACCOUNT_NAME = process.env.VOXIMPLANT_ACCOUNT_NAME ?? 'test';
 process.env.CRM_BASE_URL = process.env.CRM_BASE_URL ?? 'http://test';
 process.env.CRM_API_KEY = process.env.CRM_API_KEY ?? 'test';
+process.env.VOXIMPLANT_WEBHOOK_SECRET = process.env.VOXIMPLANT_WEBHOOK_SECRET ?? 'test-webhook-secret';
