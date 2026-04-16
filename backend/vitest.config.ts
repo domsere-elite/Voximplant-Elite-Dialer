@@ -5,6 +5,11 @@ import { dirname, resolve } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  css: {
+    postcss: {
+      plugins: [],
+    },
+  },
   test: {
     globals: true,
     environment: 'node',
