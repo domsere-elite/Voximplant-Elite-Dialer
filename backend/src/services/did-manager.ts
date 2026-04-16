@@ -133,3 +133,7 @@ function extractAreaCode(phone: string): string {
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
+
+// Singleton
+import { prisma } from '../lib/prisma.js';
+export const didManager = new DIDManager(prisma);

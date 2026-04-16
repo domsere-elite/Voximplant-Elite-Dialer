@@ -133,3 +133,8 @@ function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map((v) => Number.parseInt(v, 10));
   return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
 }
+
+// Singleton wired from shared infrastructure
+import { crmClient } from '../lib/crm-client.js';
+import { redis } from '../lib/redis.js';
+export const complianceGate = new ComplianceGate(crmClient, redis);
