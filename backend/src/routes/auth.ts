@@ -68,12 +68,15 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         id: crmUser.id,
         email: crmUser.email,
         role: crmUser.role,
+        crmUserId: crmUser.id,
         name: (crmUser as { name?: string }).name,
       },
       voximplantUser: {
         userId: mapping.voximplantUserId,
         username: mapping.voximplantUsername,
         oneTimeKey,
+        applicationName: config.voximplant.applicationName,
+        accountName: config.voximplant.accountName,
       },
     });
   });
