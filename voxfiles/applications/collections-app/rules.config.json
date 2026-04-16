@@ -1,0 +1,22 @@
+[
+  {
+    "ruleName": "outbound_agent",
+    "scenarios": ["outbound_agent"],
+    "rulePattern": ".*"
+  },
+  {
+    "ruleName": "outbound_ai",
+    "scenarios": ["outbound_ai"],
+    "rulePattern": ".*"
+  },
+  {
+    "ruleName": "inbound_ivr",
+    "scenarios": ["inbound_ivr"],
+    "rulePattern": ".*"
+  },
+  {
+    "ruleName": "payment_reminder",
+    "scenarios": ["payment_reminder"],
+    "rulePattern": ".*"
+  }
+]
