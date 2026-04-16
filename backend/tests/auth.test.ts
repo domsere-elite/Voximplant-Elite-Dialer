@@ -32,6 +32,13 @@ vi.mock('../src/lib/crm-client.js', () => ({
   CRMClient: class {},
 }));
 
+vi.mock('../src/services/voximplant-api.js', () => ({
+  voximplantAPI: {
+    init: vi.fn().mockResolvedValue(undefined),
+    createOneTimeLoginKey: vi.fn().mockResolvedValue('test-otk'),
+  },
+}));
+
 import { buildServer } from '../src/index.js';
 import { registerAuthRoutes } from '../src/routes/auth.js';
 import { authenticate, requireRole } from '../src/middleware/auth.js';
@@ -79,7 +86,7 @@ describe('auth routes + middleware', () => {
     expect(body.token).toBeTruthy();
     expect(body.user.id).toBe('u-1');
     expect(body.voximplantUser.username).toBe('agent1@app.acct.voximplant.com');
-    expect(body.voximplantUser.oneTimeKey).toBe(''); // placeholder, wired in Task 9
+    expect(body.voximplantUser.oneTimeKey).toBe('test-otk');
   });
 
   it('login with invalid creds returns 401', async () => {
@@ -174,5 +181,20 @@ describe('auth routes + middleware', () => {
     expect(prisma.agentMapping.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'OFFLINE' }) }),
     );
+  });
+
+  it('login continues with empty oneTimeKey when voximplant errors', async () => {
+    (crmClient.verifyLogin as any).mockResolvedValue({ id: 'u-1', email: 'a@b.com', role: 'rep' });
+    (prisma.agentMapping.findUnique as any).mockResolvedValue({
+      id: 'am-1', crmUserId: 'u-1', voximplantUserId: 42, voximplantUsername: 'agent1',
+    });
+    const { voximplantAPI } = await import('../src/services/voximplant-api.js');
+    (voximplantAPI.createOneTimeLoginKey as any).mockRejectedValueOnce(new Error('vox down'));
+    const res = await app.inject({
+      method: 'POST', url: '/api/auth/login',
+      payload: { email: 'a@b.com', password: 'pw' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().voximplantUser.oneTimeKey).toBe('');
   });
 });

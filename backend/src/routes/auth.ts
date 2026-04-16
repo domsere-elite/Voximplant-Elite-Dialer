@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { authenticate } from '../middleware/auth.js';
 import { config } from '../config.js';
+import { voximplantAPI } from '../services/voximplant-api.js';
 
 interface LoginBody {
   email: string;
@@ -49,8 +50,17 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       { expiresIn: config.jwt.expiresIn ?? '8h' },
     );
 
-    // Voximplant one-time key wired in Task 9 via VoximplantAPI.createOneTimeLoginKey
-    const oneTimeKey = '';
+    await voximplantAPI.init();
+    let oneTimeKey = '';
+    try {
+      oneTimeKey = await voximplantAPI.createOneTimeLoginKey(mapping.voximplantUserId);
+    } catch (err) {
+      logger.error('failed to mint voximplant one-time key', {
+        err: err instanceof Error ? err.message : String(err),
+        userId: mapping.voximplantUserId,
+      });
+      // Do not fail login — agent gets JWT, softphone will show error
+    }
 
     return reply.status(200).send({
       token,
