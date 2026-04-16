@@ -185,6 +185,7 @@ model CampaignContact {
   campaign               Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   callEvents             CallEvent[]
 
+  @@unique([campaignId, phone])
   @@index([campaignId, status, nextAttemptAfter])
   @@index([crmAccountId])
   @@index([phone])
