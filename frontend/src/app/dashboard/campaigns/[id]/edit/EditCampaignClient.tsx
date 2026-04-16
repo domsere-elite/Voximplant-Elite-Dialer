@@ -10,53 +10,7 @@ import {
   CampaignFormValues,
   DEFAULTS,
 } from '@/components/campaign/CampaignForm';
-
-interface CampaignSubmitPayload {
-  name: string;
-  dialMode: CampaignFormValues['dialMode'];
-  crmCampaignId?: string;
-  didGroupId: string;
-  scheduleStart?: string;
-  scheduleEnd?: string;
-  dialingHoursStart: string;
-  dialingHoursEnd: string;
-  timezone: string;
-  maxConcurrentCalls: number;
-  maxAbandonRate: number;
-  dialRatio: number;
-  maxAttempts: number;
-  retryDelayMinutes: number;
-  callerIdStrategy: CampaignFormValues['callerIdStrategy'];
-  fixedCallerId?: string;
-  amdEnabled: boolean;
-  voicemailDropUrl?: string;
-  autoAnswer: boolean;
-}
-
-function toPayload(values: CampaignFormValues): CampaignSubmitPayload {
-  const payload: CampaignSubmitPayload = {
-    name: values.name,
-    dialMode: values.dialMode,
-    didGroupId: values.didGroupId,
-    dialingHoursStart: values.dialingHoursStart,
-    dialingHoursEnd: values.dialingHoursEnd,
-    timezone: values.timezone,
-    maxConcurrentCalls: values.maxConcurrentCalls,
-    maxAbandonRate: values.maxAbandonRate,
-    dialRatio: values.dialRatio,
-    maxAttempts: values.maxAttempts,
-    retryDelayMinutes: values.retryDelayMinutes,
-    callerIdStrategy: values.callerIdStrategy,
-    amdEnabled: values.amdEnabled,
-    autoAnswer: values.autoAnswer,
-  };
-  if (values.crmCampaignId !== '') payload.crmCampaignId = values.crmCampaignId;
-  if (values.scheduleStart !== '') payload.scheduleStart = values.scheduleStart;
-  if (values.scheduleEnd !== '') payload.scheduleEnd = values.scheduleEnd;
-  if (values.fixedCallerId !== '') payload.fixedCallerId = values.fixedCallerId;
-  if (values.voicemailDropUrl !== '') payload.voicemailDropUrl = values.voicemailDropUrl;
-  return payload;
-}
+import { toCampaignPayload } from '@/components/campaign/payload';
 
 function formatDateTimeLocal(value: unknown): string {
   if (value === null || value === undefined || value === '') return '';
@@ -134,7 +88,7 @@ export default function EditCampaignClient() {
 
   async function handleSubmit(values: CampaignFormValues) {
     try {
-      await api.patch(`/api/campaigns/${id}`, toPayload(values));
+      await api.patch(`/api/campaigns/${id}`, toCampaignPayload(values));
       router.push(`/dashboard/campaigns/${id}`);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
