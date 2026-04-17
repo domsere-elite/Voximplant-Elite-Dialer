@@ -2,9 +2,14 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { Sidebar } from '@/components/Sidebar';
-import { SoftphoneBar } from '@/components/softphone/SoftphoneBar';
 import { useAuth } from '@/hooks/useAuth';
+
+const SoftphoneBar = dynamic(
+  () => import('@/components/softphone/SoftphoneBar').then((m) => m.SoftphoneBar),
+  { ssr: false }
+);
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
