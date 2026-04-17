@@ -87,7 +87,7 @@ export async function attachSocketIO(app: FastifyInstance): Promise<IOServer> {
   // Wait for pub/sub connections to be ready if not already
   const ensureReady = async (client: ReturnType<typeof redis.duplicate>): Promise<void> => {
     const c = client as unknown as { status: string; connect: () => Promise<void> };
-    if (c.status === 'ready' || c.status === 'connect') {
+    if (c.status === 'ready' || c.status === 'connect' || c.status === 'connecting') {
       return;
     }
     await c.connect();

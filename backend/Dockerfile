@@ -6,7 +6,7 @@ WORKDIR /app
 RUN apk add --no-cache openssl
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 
 COPY prisma ./prisma
 RUN npx prisma generate
@@ -24,7 +24,7 @@ RUN apk add --no-cache openssl tini
 ENV NODE_ENV=production
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --no-audit --no-fund
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
