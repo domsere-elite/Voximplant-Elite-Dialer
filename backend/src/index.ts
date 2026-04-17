@@ -9,6 +9,15 @@ import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
 import { setIO } from './lib/io.js';
+import { registerAuthRoutes } from './routes/auth.js';
+import { registerWebhookRoutes } from './routes/webhooks.js';
+import campaignRoutes from './routes/campaigns.js';
+import campaignContactRoutes from './routes/campaignContacts.js';
+import phoneNumberRoutes from './routes/phoneNumbers.js';
+import didGroupRoutes from './routes/didGroups.js';
+import callsRoutes from './routes/calls.js';
+import reportsRoutes from './routes/reports.js';
+import settingsRoutes from './routes/settings.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, trustProxy: true });
@@ -53,6 +62,16 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
     return reply.status(200).send(result);
   });
+
+  await registerAuthRoutes(app);
+  await registerWebhookRoutes(app);
+  await app.register(campaignRoutes, { prefix: '/api' });
+  await app.register(campaignContactRoutes, { prefix: '/api' });
+  await app.register(phoneNumberRoutes, { prefix: '/api' });
+  await app.register(didGroupRoutes, { prefix: '/api' });
+  await app.register(callsRoutes, { prefix: '/api' });
+  await app.register(reportsRoutes, { prefix: '/api/reports' });
+  await app.register(settingsRoutes, { prefix: '/api/settings' });
 
   return app;
 }

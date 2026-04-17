@@ -49,7 +49,6 @@ vi.mock('bullmq', () => ({
 process.env.VOXIMPLANT_WEBHOOK_SECRET = 'super-secret';
 
 import { buildServer } from '../src/index.js';
-import { registerWebhookRoutes } from '../src/routes/webhooks.js';
 import { prisma } from '../src/lib/prisma.js';
 import { resetConfig } from '../src/config.js';
 import type { FastifyInstance } from 'fastify';
@@ -60,7 +59,6 @@ describe('POST /api/webhooks/voximplant', () => {
   beforeAll(async () => {
     resetConfig();
     app = await buildServer();
-    await registerWebhookRoutes(app);
     await app.ready();
   });
 

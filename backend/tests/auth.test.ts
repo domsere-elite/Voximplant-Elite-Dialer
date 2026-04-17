@@ -40,7 +40,6 @@ vi.mock('../src/services/voximplant-api.js', () => ({
 }));
 
 import { buildServer } from '../src/index.js';
-import { registerAuthRoutes } from '../src/routes/auth.js';
 import { authenticate, requireRole } from '../src/middleware/auth.js';
 import { crmClient } from '../src/lib/crm-client.js';
 import { prisma } from '../src/lib/prisma.js';
@@ -51,7 +50,6 @@ describe('auth routes + middleware', () => {
 
   beforeAll(async () => {
     app = await buildServer();
-    await registerAuthRoutes(app);
     app.get('/protected', { preHandler: authenticate }, async (req) => ({ user: req.user }));
     app.get('/admin-only', {
       preHandler: [authenticate, requireRole(['admin'])],
