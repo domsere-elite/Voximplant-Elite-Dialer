@@ -160,31 +160,8 @@ export function useVoximplant(): UseVoximplantReturn {
         videoSupport: false,
         showDebugInfo: false,
       });
-      await client.connect();
 
       const Events = (VoxImplant as any).Events || {};
-
-      const onEstablished = async () => {
-        try {
-          const fullUser = voximplantUser.username.includes('@')
-            ? voximplantUser.username
-            : `${voximplantUser.username}@${voximplantUser.applicationName}.${voximplantUser.accountName}.voximplant.com`;
-          if (voximplantUser.oneTimeKey) {
-            await client.loginWithOneTimeKey(fullUser, voximplantUser.oneTimeKey);
-          } else if (voximplantUser.password) {
-            await client.login(fullUser, voximplantUser.password);
-          } else {
-            throw new Error('No Voximplant credentials (oneTimeKey or password)');
-          }
-          if (mountedRef.current) setSdkState('ready');
-        } catch (err: any) {
-          if (mountedRef.current) {
-            console.error('[Voximplant] login failed', err);
-            setSdkState('error');
-            setError(err?.message || err?.code || 'Voximplant login failed');
-          }
-        }
-      };
 
       const onConnectionFailed = (e: any) => {
         console.error('[Voximplant] connection failed', e);
@@ -207,9 +184,30 @@ export function useVoximplant(): UseVoximplantReturn {
         }
       };
 
-      registerClientListener(Events.ConnectionEstablished || 'ConnectionEstablished', onEstablished);
       registerClientListener(Events.ConnectionFailed || 'ConnectionFailed', onConnectionFailed);
       registerClientListener(Events.IncomingCall || 'IncomingCall', onIncoming);
+
+      await client.connect();
+
+      try {
+        const fullUser = voximplantUser.username.includes('@')
+          ? voximplantUser.username
+          : `${voximplantUser.username}@${voximplantUser.applicationName}.${voximplantUser.accountName}.voximplant.com`;
+        if (voximplantUser.oneTimeKey) {
+          await client.loginWithOneTimeKey(fullUser, voximplantUser.oneTimeKey);
+        } else if (voximplantUser.password) {
+          await client.login(fullUser, voximplantUser.password);
+        } else {
+          throw new Error('No Voximplant credentials (oneTimeKey or password)');
+        }
+        if (mountedRef.current) setSdkState('ready');
+      } catch (err: any) {
+        if (mountedRef.current) {
+          console.error('[Voximplant] login failed', err);
+          setSdkState('error');
+          setError(err?.message || err?.code || 'Voximplant login failed');
+        }
+      }
     } catch (err: any) {
       console.error('[Voximplant] init/connect failed', err);
       setSdkState('error');
