@@ -6,10 +6,10 @@
 
 require(Modules.IVR);
 
-var DIALER_BACKEND_URL = 'https://dialer.example.com/api/voximplant/webhooks/inbound';
-var CRM_PREFETCH_URL = 'https://crm.example.com/api/voice/tools/prefetch-account';
-var DIALER_API_KEY = 'REPLACE_WITH_API_KEY';
-var CRM_API_KEY = 'REPLACE_WITH_CRM_KEY';
+var DIALER_BACKEND_URL = 'https://backend-production-e2bf.up.railway.app/api/webhooks/voximplant';
+var CRM_PREFETCH_URL = 'https://placeholder.example.com/api/voice/tools/prefetch-account';
+var DIALER_API_KEY = '553219b5ec60f56412f22a12c1692846d056b2d05ad12e15f734663dc5d06604';
+var CRM_API_KEY = 'placeholder';
 
 var IVR_GREETING = 'Thank you for calling Elite Portfolio Management.';
 var IVR_MAIN_MENU = 'Press 1 to speak with a representative. Press 2 to check your account balance. Press 3 to request a callback.';
@@ -30,15 +30,13 @@ var state = {
 
 function notifyDialerBackend(eventType, payload) {
   try {
-    var body = JSON.stringify({
-      event: eventType,
-      call_id: state.inboundCall ? state.inboundCall.id() : null,
-      timestamp: new Date().toISOString(),
-      data: payload || {},
-    });
+    var data = payload || {};
+    data.voximplantCallId = state.inboundCall ? state.inboundCall.id() : null;
+    data.timestamp = new Date().toISOString();
+    var body = JSON.stringify({ event: eventType, data: data });
     Net.httpRequestAsync(DIALER_BACKEND_URL, {
       method: 'POST',
-      headers: ['Content-Type: application/json', 'X-Dialer-Key: ' + DIALER_API_KEY],
+      headers: ['Content-Type: application/json', 'X-Webhook-Secret: ' + DIALER_API_KEY],
       postData: body,
     }, function () { /* fire and forget */ });
   } catch (e) {

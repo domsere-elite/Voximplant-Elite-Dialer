@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import VoxImplant from 'voximplant-websdk';
+import * as VoxMod from 'voximplant-websdk';
+const VoxImplant: any = (VoxMod as any).default ?? (VoxMod as any).VoxImplant ?? VoxMod;
 import { useAuthStore } from '@/stores/auth-store';
 import type { AgentStatus } from '@/types';
 
@@ -139,6 +140,11 @@ export function useVoximplant(): UseVoximplantReturn {
 
   const connect = useCallback(async () => {
     if (!voximplantUser) return;
+    if (!VoxImplant || typeof VoxImplant.getInstance !== 'function') {
+      setSdkState('error');
+      setError('Voximplant SDK not available');
+      return;
+    }
     const client = (VoxImplant as any).getInstance();
     clientRef.current = client;
     // Singleton client may already have our handlers attached from a prior
