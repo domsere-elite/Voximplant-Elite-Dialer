@@ -154,8 +154,18 @@ export function useVoximplant(): UseVoximplantReturn {
     setError(null);
 
     try {
+      let voxNode: HTMLElement | undefined;
+      if (typeof document !== 'undefined') {
+        voxNode = document.getElementById('vox-sdk-node') as HTMLElement | null ?? undefined;
+        if (!voxNode) {
+          voxNode = document.createElement('div');
+          voxNode.id = 'vox-sdk-node';
+          voxNode.style.display = 'none';
+          document.body.appendChild(voxNode);
+        }
+      }
       await client.init({
-        node: typeof document !== 'undefined' ? document.body : undefined,
+        node: voxNode,
         micRequired: true,
         videoSupport: false,
         showDebugInfo: false,
