@@ -28,6 +28,7 @@ export function SoftphoneBar() {
   const realtime = useRealtimeCall();
   const [status, setLocalStatus] = useState<AgentStatus>('available');
   const [wrapUpOpen, setWrapUpOpen] = useState(false);
+  const [dialInput, setDialInput] = useState('');
 
   useEffect(() => {
     if (realtime.statusChange?.status) {
@@ -100,7 +101,39 @@ export function SoftphoneBar() {
 
           <div className="flex-1 flex items-center justify-center gap-4 text-sm">
             {stage === 'idle' && (
-              <span className="text-slate-400">Idle — waiting for calls</span>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const raw = dialInput.trim();
+                  if (!raw) return;
+                  const e164 = raw.startsWith('+') ? raw : `+${raw.replace(/[^0-9]/g, '')}`;
+                  try {
+                    vox.callPSTN(e164);
+                    setDialInput('');
+                  } catch (err) {
+                    console.error('dial failed', err);
+                  }
+                }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="+1 555 123 4567"
+                  value={dialInput}
+                  onChange={(e) => setDialInput(e.target.value)}
+                  className="bg-slate-800 text-white border border-slate-700 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-56"
+                  aria-label="Phone number to dial"
+                />
+                <button
+                  type="submit"
+                  disabled={vox.sdkState !== 'ready' || !dialInput.trim()}
+                  className="inline-flex items-center gap-1 px-3 py-1 rounded-md bg-primary-600 hover:bg-primary-700 disabled:bg-slate-700 disabled:text-slate-400 text-white text-sm"
+                >
+                  <PhoneCall className="h-4 w-4" /> Dial
+                </button>
+                <span className="text-slate-500 text-xs">Idle</span>
+              </form>
             )}
 
             {stage === 'ringing' && callerInfo && (
