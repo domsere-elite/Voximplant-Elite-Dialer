@@ -94,7 +94,7 @@ export function SoftphoneBar() {
                 'h-2 w-2 rounded-full',
                 vox.sdkState === 'ready' ? 'bg-success-500' : vox.sdkState === 'error' ? 'bg-danger-500' : 'bg-warning-500'
               )}
-              title={`SDK: ${vox.sdkState}`}
+              title={vox.error ? `SDK: ${vox.sdkState} — ${vox.error}` : `SDK: ${vox.sdkState}`}
             />
           </div>
 

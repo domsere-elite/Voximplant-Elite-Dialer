@@ -154,7 +154,12 @@ export function useVoximplant(): UseVoximplantReturn {
     setError(null);
 
     try {
-      await client.init({ micRequired: true, videoSupport: false, showDebugInfo: false });
+      await client.init({
+        node: typeof document !== 'undefined' ? document.body : undefined,
+        micRequired: true,
+        videoSupport: false,
+        showDebugInfo: false,
+      });
       await client.connect();
 
       const Events = (VoxImplant as any).Events || {};
@@ -174,15 +179,17 @@ export function useVoximplant(): UseVoximplantReturn {
           if (mountedRef.current) setSdkState('ready');
         } catch (err: any) {
           if (mountedRef.current) {
+            console.error('[Voximplant] login failed', err);
             setSdkState('error');
-            setError(err?.message || 'Voximplant login failed');
+            setError(err?.message || err?.code || 'Voximplant login failed');
           }
         }
       };
 
       const onConnectionFailed = (e: any) => {
+        console.error('[Voximplant] connection failed', e);
         setSdkState('error');
-        setError(e?.message || 'Voximplant connection failed');
+        setError(e?.message || e?.code || 'Voximplant connection failed');
       };
 
       const onIncoming = (evt: any) => {
@@ -204,8 +211,9 @@ export function useVoximplant(): UseVoximplantReturn {
       registerClientListener(Events.ConnectionFailed || 'ConnectionFailed', onConnectionFailed);
       registerClientListener(Events.IncomingCall || 'IncomingCall', onIncoming);
     } catch (err: any) {
+      console.error('[Voximplant] init/connect failed', err);
       setSdkState('error');
-      setError(err?.message || 'SDK init failed');
+      setError(err?.message || err?.code || 'SDK init failed');
     }
   }, [voximplantUser, attachCallEvents]);
 
