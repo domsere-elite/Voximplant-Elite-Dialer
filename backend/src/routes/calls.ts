@@ -1,432 +1,219 @@
-import { Router, Response } from 'express';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import axios from 'axios';
-import { prisma } from '../lib/prisma';
-import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { voximplantClient } from '../services/voximplant-client';
-import { complianceService } from '../services/compliance';
-import { selectCallerId } from '../services/caller-id-selector';
-import { config } from '../config';
-import { logger } from '../lib/logger';
-import { io } from '../index';
+import { AgentStatus, CallDirection } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
+import { crmClient } from '../lib/crm-client.js';
+import { voximplantAPI } from '../services/voximplant-api.js';
+import { complianceGate } from '../services/compliance-gate.js';
+import { didManager } from '../services/did-manager.js';
+import { syncCallOutcomeQueue } from '../jobs/queue.js';
+import { authenticate, requireRole } from '../middleware/auth.js';
+import { logger } from '../lib/logger.js';
+import { config } from '../config.js';
 
-export const callRouter = Router();
-callRouter.use(authenticate);
-
-const initiateCallSchema = z.object({
-  phone: z.string().min(10),
-  campaignId: z.string().optional(),
-  contactId: z.string().optional(),
-  mode: z.enum(['agent', 'ai']).default('agent'),
-  aiPromptOverride: z.string().optional(),
+const dialBody = z.object({
+  crmAccountId: z.string().min(1),
+  phone: z.string().min(1),
+  campaignId: z.string().uuid().optional(),
 });
 
-const dispositionSchema = z.object({
-  code: z.string(),
+const dispositionBody = z.object({
+  dispositionCode: z.string().min(1),
   notes: z.string().optional(),
-  scheduleCallback: z.boolean().optional(),
-  callbackAt: z.string().datetime().optional(),
+  callbackAt: z.coerce.date().optional(),
 });
 
-// Initiate outbound call
-callRouter.post('/initiate', async (req: AuthRequest, res: Response) => {
-  try {
-    const data = initiateCallSchema.parse(req.body);
-
-    // Compliance checks
-    const dncCheck = await complianceService.checkDNC(data.phone);
-    if (dncCheck.blocked) {
-      res.status(403).json({ error: 'Number is on the Do Not Call list', details: dncCheck });
-      return;
-    }
-
-    const tcpaCheck = complianceService.checkTCPAWindow(data.phone);
-    if (!tcpaCheck.allowed) {
-      res.status(403).json({ error: 'Outside TCPA calling window', details: tcpaCheck });
-      return;
-    }
-
-    // Reg F check (7 calls per debt per 7 days)
-    if (data.contactId) {
-      const regfCheck = await complianceService.checkRegF(data.contactId);
-      if (!regfCheck.allowed) {
-        res.status(403).json({ error: 'Reg F frequency limit reached', details: regfCheck });
-        return;
-      }
-    }
-
-    // Select caller ID based on campaign strategy
-    let fromNumber = config.voximplant.defaultCallerId;
-    if (data.campaignId) {
-      const campaign = await prisma.campaign.findUnique({ where: { id: data.campaignId } });
-      if (campaign) {
-        fromNumber = await selectCallerId(
-          campaign.id,
-          campaign.callerIdStrategy as 'fixed' | 'rotation' | 'proximity',
-          data.phone,
-          campaign.fixedCallerId || undefined
-        );
-      }
-    }
-
-    // Create call record
-    const call = await prisma.call.create({
-      data: {
-        direction: 'outbound',
-        status: 'initiated',
-        fromNumber,
-        toNumber: data.phone,
-        agentId: data.mode === 'agent' ? req.user!.id : null,
-        campaignId: data.campaignId || null,
-        contactId: data.contactId || null,
-        callMode: data.mode,
-      },
-    });
-
-    // Create audit event
-    await prisma.callEvent.create({
-      data: {
-        callId: call.id,
-        event: 'call_initiated',
-        details: { mode: data.mode, initiatedBy: req.user!.id },
-      },
-    });
-
-    // Initiate via Voximplant
-    const scenarioName = data.mode === 'ai' ? 'outbound_ai' : 'outbound_agent';
-    const result = await voximplantClient.startScenario({
-      ruleId: scenarioName,
-      scriptCustomData: JSON.stringify({
-        callId: call.id,
-        phone: data.phone,
-        mode: data.mode,
-        agentId: req.user!.id,
-        campaignId: data.campaignId,
-        contactId: data.contactId,
-        aiPrompt: data.aiPromptOverride,
-        fromNumber,
-      }),
-    });
-
-    // Update call with provider reference
-    await prisma.call.update({
-      where: { id: call.id },
-      data: {
-        providerCallId: result?.mediaSessionAccessUrl || null,
-        status: 'ringing',
-      },
-    });
-
-    // Track Reg F attempt
-    if (data.contactId) {
-      await complianceService.recordRegFAttempt(data.contactId, call.id);
-    }
-
-    // Update agent status
-    if (data.mode === 'agent') {
-      await prisma.user.update({
-        where: { id: req.user!.id },
-        data: { status: 'on_call' },
-      });
-    }
-
-    // Real-time notification
-    io.to('supervisors').emit('call:initiated', {
-      callId: call.id,
-      phone: data.phone,
-      mode: data.mode,
-      agentId: req.user!.id,
-    });
-
-    res.status(201).json({ call });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation error', details: err.errors });
-      return;
-    }
-    logger.error('Failed to initiate call:', err);
-    throw err;
-  }
+const statusBody = z.object({
+  status: z.nativeEnum(AgentStatus),
 });
 
-// Get call history
-callRouter.get('/', async (req: AuthRequest, res: Response) => {
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+const callsRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  app.addHook('preHandler', authenticate);
 
-  // Agents see only their calls, supervisors see all
-  const where: any = {};
-  if (req.user!.role === 'agent') {
-    where.agentId = req.user!.id;
-  }
-  if (req.query.direction) where.direction = req.query.direction;
-  if (req.query.status) where.status = req.query.status;
-  if (req.query.campaignId) where.campaignId = req.query.campaignId;
+  app.post('/calls/dial', async (req, reply) => {
+    const parsed = dialBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const { crmAccountId, phone, campaignId } = parsed.data;
+    const user = req.user;
 
-  const [calls, total] = await Promise.all([
-    prisma.call.findMany({
-      where,
-      include: {
-        agent: { select: { id: true, firstName: true, lastName: true } },
-        contact: { select: { id: true, firstName: true, lastName: true, phone: true, accountNumber: true } },
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
-    }),
-    prisma.call.count({ where }),
-  ]);
+    const agent = await prisma.agentMapping.findFirst({ where: { crmUserId: user.crmUserId } });
+    if (!agent) {
+      return reply.status(400).send({ error: 'no agent mapping for user' });
+    }
 
-  res.json({ calls, total, page, limit });
-});
+    const campaign = campaignId
+      ? await prisma.campaign.findUnique({ where: { id: campaignId } })
+      : null;
+    const dialingHoursStart = campaign?.dialingHoursStart ?? '08:00';
+    const dialingHoursEnd = campaign?.dialingHoursEnd ?? '21:00';
 
-// Hangup call
-callRouter.post('/:id/hangup', async (req: AuthRequest, res: Response) => {
-  const call = await prisma.call.findUnique({ where: { id: req.params.id } });
-  if (!call) {
-    res.status(404).json({ error: 'Call not found' });
-    return;
-  }
-
-  // End the call via Voximplant if it has a provider reference
-  if (call.providerCallId) {
+    let timezone = campaign?.timezone ?? 'America/Chicago';
     try {
-      await voximplantClient.hangupCall(call.providerCallId);
+      const account = await crmClient.getAccount(crmAccountId);
+      if (typeof account?.timezone === 'string') {
+        timezone = account.timezone;
+      }
     } catch (err) {
-      logger.warn('Failed to hangup via Voximplant, call may already be ended:', err);
-    }
-  }
-
-  const updated = await prisma.call.update({
-    where: { id: call.id },
-    data: {
-      status: 'completed',
-      endedAt: new Date(),
-      duration: call.answeredAt
-        ? Math.floor((Date.now() - call.answeredAt.getTime()) / 1000)
-        : 0,
-    },
-  });
-
-  await prisma.callEvent.create({
-    data: {
-      callId: call.id,
-      event: 'call_ended',
-      details: { endedBy: req.user!.id },
-    },
-  });
-
-  // Reset agent status
-  if (call.agentId) {
-    await prisma.user.update({
-      where: { id: call.agentId },
-      data: { status: 'wrap_up' },
-    });
-  }
-
-  io.to('supervisors').emit('call:ended', { callId: call.id });
-
-  res.json({ call: updated });
-});
-
-// Disposition a call
-callRouter.post('/:id/disposition', async (req: AuthRequest, res: Response) => {
-  try {
-    const data = dispositionSchema.parse(req.body);
-
-    const call = await prisma.call.findUnique({ where: { id: req.params.id } });
-    if (!call) {
-      res.status(404).json({ error: 'Call not found' });
-      return;
-    }
-
-    await prisma.call.update({
-      where: { id: call.id },
-      data: { dispositionCode: data.code, notes: data.notes },
-    });
-
-    // Update campaign contact if linked
-    if (call.contactId) {
-      const contactUpdate: any = {};
-      if (['completed', 'payment_made', 'payment_promised'].includes(data.code)) {
-        contactUpdate.status = 'completed';
-      } else if (data.code === 'no_answer' || data.code === 'voicemail') {
-        contactUpdate.status = 'pending';
-        contactUpdate.nextAttemptAfter = new Date(Date.now() + 3600 * 1000);
-      } else if (data.code === 'wrong_number' || data.code === 'disconnected') {
-        contactUpdate.status = 'failed';
-      }
-
-      if (Object.keys(contactUpdate).length > 0) {
-        await prisma.campaignContact.update({
-          where: { id: call.contactId },
-          data: contactUpdate,
-        });
-      }
-
-      // Schedule callback if requested
-      if (data.scheduleCallback && data.callbackAt) {
-        await prisma.callback.create({
-          data: {
-            callId: call.id,
-            contactId: call.contactId,
-            agentId: req.user!.id,
-            scheduledAt: new Date(data.callbackAt),
-            phone: call.toNumber,
-          },
-        });
-      }
-    }
-
-    await prisma.callEvent.create({
-      data: {
-        callId: call.id,
-        event: 'call_dispositioned',
-        details: { code: data.code, notes: data.notes },
-      },
-    });
-
-    // Reset agent to available
-    if (call.agentId) {
-      await prisma.user.update({
-        where: { id: call.agentId },
-        data: { status: 'available' },
+      logger.warn('failed to fetch CRM account — continuing with default timezone', {
+        err: err instanceof Error ? err.message : String(err),
+        crmAccountId,
       });
     }
 
-    res.json({ success: true });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation error', details: err.errors });
-      return;
-    }
-    throw err;
-  }
-});
+    const gate = await complianceGate.checkAll(
+      { phone, crmAccountId, timezone },
+      { dialingHoursStart, dialingHoursEnd },
+    );
 
-// Get single call with audit trail
-callRouter.get('/:id', async (req: AuthRequest, res: Response) => {
-  const call = await prisma.call.findUnique({
-    where: { id: req.params.id },
-    include: {
-      agent: { select: { id: true, firstName: true, lastName: true } },
-      contact: true,
-      events: { orderBy: { createdAt: 'asc' } },
-      recordings: true,
-      transcripts: true,
-    },
-  });
-
-  if (!call) {
-    res.status(404).json({ error: 'Call not found' });
-    return;
-  }
-  res.json({ call });
-});
-
-// =============================================================================
-// Supervisor Monitoring
-// =============================================================================
-
-const superviseSchema = z.object({
-  mode: z.enum(['listen', 'whisper', 'barge']),
-});
-
-// Join an active call as supervisor
-callRouter.post('/:id/supervise', requireRole('supervisor', 'admin'), async (req: AuthRequest, res: Response) => {
-  try {
-    const data = superviseSchema.parse(req.body);
-    const call = await prisma.call.findUnique({ where: { id: req.params.id } });
-
-    if (!call) {
-      res.status(404).json({ error: 'Call not found' });
-      return;
-    }
-    if (call.status !== 'in_progress') {
-      res.status(400).json({ error: 'Call is not in progress' });
-      return;
-    }
-    if (!call.providerCallId) {
-      res.status(400).json({ error: 'Call has no active session URL' });
-      return;
+    if (!gate.cleared) {
+      try {
+        await crmClient.logCompliance({
+          phone,
+          check: 'dnc',
+          result: 'block',
+          reason: gate.reasons.join(','),
+          accountId: crmAccountId,
+          campaignId: campaignId ?? undefined,
+        });
+      } catch (err) {
+        logger.warn('failed to log compliance block', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return reply.status(403).send({ error: 'compliance_blocked', reasons: gate.reasons });
     }
 
-    // POST to the VoxEngine session to trigger supervisor join
-    await axios.post(call.providerCallId, JSON.stringify({
-      action: 'supervisor_join',
-      supervisorId: req.user!.id,
-      mode: data.mode,
-    }), {
-      headers: { 'Content-Type': 'application/json' },
+    let callerId: string;
+    try {
+      callerId = await didManager.selectCallerId(campaignId ?? 'manual', phone);
+    } catch (err) {
+      logger.warn('callerId selection failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return reply.status(503).send({ error: 'no_caller_id_available' });
+    }
+
+    const customData = JSON.stringify({
+      to: phone,
+      from: callerId,
+      crmAccountId,
+      campaignId: campaignId ?? null,
+      agentUsername: agent.voximplantUsername,
+      amdEnabled: campaign?.amdEnabled ?? true,
+      vmDropUrl: campaign?.voicemailDropUrl ?? null,
     });
 
-    await prisma.callEvent.create({
+    const session = await voximplantAPI.startScenarios({
+      ruleId: config.voximplant.outboundAgentRuleId,
+      userId: agent.voximplantUserId,
+      customData,
+    });
+
+    const callEvent = await prisma.callEvent.create({
       data: {
-        callId: call.id,
-        event: 'supervisor_joined',
-        details: { supervisorId: req.user!.id, mode: data.mode },
+        voximplantCallId: session.callSessionHistoryId,
+        campaignId: campaignId ?? null,
+        agentMappingId: agent.id,
+        crmAccountId,
+        direction: CallDirection.OUTBOUND,
+        fromNumber: callerId,
+        toNumber: phone,
+        status: 'initiated',
       },
     });
 
-    io.to(`agent:${call.agentId}`).emit('call:supervisor_joined', {
-      callId: call.id,
-      mode: data.mode,
-    });
+    return { callId: callEvent.id, voximplantSessionId: callEvent.voximplantCallId };
+  });
 
-    res.json({ success: true });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation error', details: err.errors });
-      return;
+  app.post<{ Params: { id: string } }>('/calls/:id/disposition', async (req, reply) => {
+    const parsed = dispositionBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    logger.error('Failed to start supervision:', err);
-    res.status(500).json({ error: 'Failed to join call' });
-  }
-});
 
-// Leave supervisor monitoring
-callRouter.post('/:id/supervise/leave', requireRole('supervisor', 'admin'), async (req: AuthRequest, res: Response) => {
-  const call = await prisma.call.findUnique({ where: { id: req.params.id } });
+    const event = await prisma.callEvent.findUnique({ where: { id: req.params.id } });
+    if (!event) return reply.status(404).send({ error: 'not found' });
 
-  if (!call || !call.providerCallId) {
-    res.status(404).json({ error: 'Call not found or no active session' });
-    return;
-  }
-
-  try {
-    await axios.post(call.providerCallId, JSON.stringify({
-      action: 'supervisor_leave',
-    }), {
-      headers: { 'Content-Type': 'application/json' },
+    await prisma.callEvent.update({
+      where: { id: req.params.id },
+      data: { dispositionCode: parsed.data.dispositionCode },
     });
 
-    await prisma.callEvent.create({
+    await syncCallOutcomeQueue.add(
+      'sync-call-outcome',
+      { callEventId: req.params.id },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+    );
+
+    if (parsed.data.callbackAt && event.crmAccountId) {
+      try {
+        await crmClient.logCall(event.crmAccountId, {
+          duration: event.durationSeconds ?? 0,
+          outcome: 'callback_scheduled',
+          agentId: event.agentMappingId ?? '',
+          voximplantCallId: event.voximplantCallId,
+          notes: parsed.data.notes,
+        });
+      } catch (err) {
+        logger.warn('failed to log callback via CRM', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { ok: true };
+  });
+
+  app.get('/calls/active', { preHandler: requireRole(['supervisor', 'admin']) }, async () => {
+    const events = await prisma.callEvent.findMany({
+      where: { status: { notIn: ['completed', 'failed'] } },
+      include: { agentMapping: true, campaign: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return events;
+  });
+
+  app.patch('/agents/me/status', async (req, reply) => {
+    const parsed = statusBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const user = req.user;
+
+    const agent = await prisma.agentMapping.findFirst({ where: { crmUserId: user.crmUserId } });
+    if (!agent) return reply.status(404).send({ error: 'no agent mapping' });
+
+    const now = new Date();
+    const prev = await prisma.agentStatusLog.findFirst({
+      where: { agentMappingId: agent.id, endedAt: null },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (prev) {
+      const duration = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(prev.startedAt).getTime()) / 1000),
+      );
+      await prisma.agentStatusLog.updateMany({
+        where: { id: prev.id },
+        data: { endedAt: now, durationSeconds: duration },
+      });
+    }
+    await prisma.agentStatusLog.create({
       data: {
-        callId: call.id,
-        event: 'supervisor_left',
-        details: { supervisorId: req.user!.id },
+        agentMappingId: agent.id,
+        status: parsed.data.status,
+        startedAt: now,
+        campaignId: agent.currentCampaignId ?? null,
       },
     });
-
-    io.to(`agent:${call.agentId}`).emit('call:supervisor_left', { callId: call.id });
-
-    res.json({ success: true });
-  } catch (err) {
-    logger.error('Failed to leave supervision:', err);
-    res.status(500).json({ error: 'Failed to leave call' });
-  }
-});
-
-// List active calls (for supervisor dashboard)
-callRouter.get('/active/list', requireRole('supervisor', 'admin'), async (_req: AuthRequest, res: Response) => {
-  const activeCalls = await prisma.call.findMany({
-    where: { status: { in: ['in_progress', 'ringing'] } },
-    include: {
-      agent: { select: { id: true, firstName: true, lastName: true } },
-      contact: { select: { id: true, firstName: true, lastName: true, phone: true } },
-      campaign: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: 'desc' },
+    const updated = await prisma.agentMapping.update({
+      where: { id: agent.id },
+      data: { status: parsed.data.status },
+    });
+    return updated;
   });
-  res.json({ calls: activeCalls });
-});
+};
+
+export default callsRoutes;

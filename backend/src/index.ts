@@ -1,97 +1,138 @@
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import http from 'http';
-import jwt from 'jsonwebtoken';
-import { Server as SocketServer } from 'socket.io';
-import { config } from './config';
-import { logger } from './lib/logger';
-import { AuthUser } from './middleware/auth';
-import { authRouter } from './routes/auth';
-import { agentRouter } from './routes/agents';
-import { campaignRouter } from './routes/campaigns';
-import { callRouter } from './routes/calls';
-import { reportRouter } from './routes/reports';
-import { voximplantWebhookRouter } from './routes/voximplant-webhooks';
-import { systemRouter } from './routes/system';
-import { errorHandler } from './middleware/error-handler';
-import { rateLimiter } from './middleware/rate-limiter';
+import Fastify, { FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import jwt from '@fastify/jwt';
+import { Server as IOServer } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { config } from './config.js';
+import { logger } from './lib/logger.js';
+import { prisma } from './lib/prisma.js';
+import { redis } from './lib/redis.js';
+import { setIO } from './lib/io.js';
+import { registerAuthRoutes } from './routes/auth.js';
+import { registerWebhookRoutes } from './routes/webhooks.js';
+import campaignRoutes from './routes/campaigns.js';
+import campaignContactRoutes from './routes/campaignContacts.js';
+import phoneNumberRoutes from './routes/phoneNumbers.js';
+import didGroupRoutes from './routes/didGroups.js';
+import callsRoutes from './routes/calls.js';
+import reportsRoutes from './routes/reports.js';
+import settingsRoutes from './routes/settings.js';
 
-const app = express();
-const server = http.createServer(app);
+export async function buildServer(): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false, trustProxy: true });
 
-// WebSocket server for real-time updates (improvement over EliteDial's polling)
-export const io = new SocketServer(server, {
-  cors: {
+  await app.register(cors, {
     origin: config.frontend.url,
-    methods: ['GET', 'POST'],
-  },
-});
+    credentials: true,
+  });
+  await app.register(helmet, { contentSecurityPolicy: false });
+  await app.register(jwt, { secret: config.jwt.secret });
 
-// Middleware
-app.use(helmet());
-app.use(cors({ origin: config.frontend.url, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
-app.use(rateLimiter);
+  app.get('/health', async (_req, reply) => {
+    const result: Record<string, string | number> = {
+      status: 'ok',
+      db: 'ok',
+      redis: 'ok',
+      timestamp: Date.now(),
+    };
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch (err) {
+      result.db = 'error';
+      result.status = 'degraded';
+      logger.error('health: db check failed', { err: err instanceof Error ? err.message : String(err) });
+    }
 
-// API routes
-app.use('/api/auth', authRouter);
-app.use('/api/agents', agentRouter);
-app.use('/api/campaigns', campaignRouter);
-app.use('/api/calls', callRouter);
-app.use('/api/reports', reportRouter);
-app.use('/api/webhooks/voximplant', voximplantWebhookRouter);
-app.use('/api/system', systemRouter);
+    try {
+      const pong = await redis.ping();
+      if (pong !== 'PONG') {
+        result.redis = 'error';
+        result.status = 'degraded';
+      }
+    } catch (err) {
+      result.redis = 'error';
+      result.status = 'degraded';
+      logger.error('health: redis check failed', { err: err instanceof Error ? err.message : String(err) });
+    }
 
-// Error handling
-app.use(errorHandler);
-
-// WebSocket authentication middleware
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token as string | undefined;
-  if (!token) {
-    next(new Error('Authentication required'));
-    return;
-  }
-
-  try {
-    const decoded = jwt.verify(token, config.jwt.secret) as AuthUser;
-    socket.data.user = decoded;
-    next();
-  } catch {
-    next(new Error('Invalid or expired token'));
-  }
-});
-
-// WebSocket connection handling
-io.on('connection', (socket) => {
-  const user = socket.data.user as AuthUser;
-  logger.info(`WebSocket client connected: ${socket.id} (user: ${user.id})`);
-
-  // Auto-join agent's own room
-  socket.join(`agent:${user.id}`);
-
-  // Only supervisors/admins can join the supervisors room
-  if (user.role === 'supervisor' || user.role === 'admin') {
-    socket.join('supervisors');
-  }
-
-  socket.on('join:campaign', (campaignId: string) => {
-    socket.join(`campaign:${campaignId}`);
+    if (result.status === 'degraded') {
+      return reply.status(503).send(result);
+    }
+    return reply.status(200).send(result);
   });
 
-  socket.on('disconnect', () => {
-    logger.info(`WebSocket client disconnected: ${socket.id}`);
+  await registerAuthRoutes(app);
+  await registerWebhookRoutes(app);
+  await app.register(campaignRoutes, { prefix: '/api' });
+  await app.register(campaignContactRoutes, { prefix: '/api' });
+  await app.register(phoneNumberRoutes, { prefix: '/api' });
+  await app.register(didGroupRoutes, { prefix: '/api' });
+  await app.register(callsRoutes, { prefix: '/api' });
+  await app.register(reportsRoutes, { prefix: '/api/reports' });
+  await app.register(settingsRoutes, { prefix: '/api/settings' });
+
+  return app;
+}
+
+export async function attachSocketIO(app: FastifyInstance): Promise<IOServer> {
+  const io = new IOServer(app.server, {
+    cors: { origin: config.frontend.url, credentials: true },
   });
-});
 
-server.listen(config.port, () => {
-  logger.info(`Server running on port ${config.port} in ${config.env} mode`);
-});
+  const pub = redis.duplicate();
+  const sub = redis.duplicate();
 
-export default app;
+  // Wait for pub/sub connections to be ready if not already
+  const ensureReady = async (client: ReturnType<typeof redis.duplicate>): Promise<void> => {
+    const c = client as unknown as { status: string; connect: () => Promise<void> };
+    if (c.status === 'ready' || c.status === 'connect') {
+      return;
+    }
+    await c.connect();
+  };
+
+  await Promise.all([ensureReady(pub), ensureReady(sub)]);
+  io.adapter(createAdapter(pub, sub));
+
+  setIO(io);
+  return io;
+}
+
+async function start(): Promise<void> {
+  const app = await buildServer();
+  await attachSocketIO(app);
+
+  await app.listen({ host: '0.0.0.0', port: config.server.port });
+  logger.info('elite-dialer backend started', {
+    port: config.server.port,
+    env: config.server.nodeEnv,
+  });
+
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info('shutdown initiated', { signal });
+    try {
+      await app.close();
+      await prisma.$disconnect();
+      await redis.quit();
+    } catch (err) {
+      logger.error('shutdown error', { err: err instanceof Error ? err.message : String(err) });
+    } finally {
+      process.exit(0);
+    }
+  };
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+// ESM equivalent of `require.main === module` check.
+// Only start the server when this file is run directly (not imported by tests).
+const isMainModule = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`;
+if (isMainModule) {
+  start().catch((err) => {
+    logger.error('startup failed', { err: err instanceof Error ? err.message : String(err) });
+    process.exit(1);
+  });
+}

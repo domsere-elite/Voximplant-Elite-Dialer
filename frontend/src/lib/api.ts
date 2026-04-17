@@ -1,30 +1,45 @@
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const BASE_URL = process.env.NEXT_PUBLIC_DIALER_API_URL || 'http://localhost:5000';
 
-export const api = axios.create({
-  baseURL: `${API_URL}/api`,
+export const api: AxiosInstance = axios.create({
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  timeout: 30000
 });
 
-// Attach JWT token to every request
+let cachedToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  cachedToken = token;
+}
+
+export function clearAuthToken() {
+  cachedToken = null;
+}
+
 api.interceptors.request.use((config) => {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+  const token =
+    cachedToken ||
+    (typeof window !== 'undefined' ? window.localStorage.getItem('dialer.token') : null);
+  if (token) {
+    config.headers = config.headers || {};
+    (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
   }
   return config;
 });
 
-// Handle 401 responses globally
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-      window.location.href = '/';
+    if (error?.response?.status === 401 && typeof window !== 'undefined') {
+      window.localStorage.removeItem('dialer.token');
+      window.localStorage.removeItem('dialer.user');
+      window.localStorage.removeItem('dialer.voximplant');
+      clearAuthToken();
+      if (window.location.pathname !== '/') {
+        window.location.href = '/';
+      }
     }
     return Promise.reject(error);
   }

@@ -1,44 +1,48 @@
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { config } from '../config';
+import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
-export interface AuthUser {
-  id: string;
-  email: string;
-  role: 'agent' | 'supervisor' | 'admin';
-}
-
-export interface AuthRequest extends Request {
-  user?: AuthUser;
-}
-
-export function authenticate(req: AuthRequest, res: Response, next: NextFunction): void {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing authorization token' });
-    return;
+declare module 'fastify' {
+  interface FastifyRequest {
+    user: {
+      id: string;
+      email: string;
+      role: string;
+      crmUserId: string;
+    };
   }
+}
 
-  const token = header.slice(7);
+declare module '@fastify/jwt' {
+  interface FastifyJWT {
+    payload: {
+      id: string;
+      email: string;
+      role: string;
+      crmUserId: string;
+    };
+    user: {
+      id: string;
+      email: string;
+      role: string;
+      crmUserId: string;
+    };
+  }
+}
+
+export const authenticate: preHandlerHookHandler = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   try {
-    const decoded = jwt.verify(token, config.jwt.secret) as AuthUser;
-    req.user = decoded;
-    next();
+    await req.jwtVerify();
   } catch {
-    res.status(401).json({ error: 'Invalid or expired token' });
+    return reply.status(401).send({ error: 'unauthorized' });
   }
-}
+};
 
-export function requireRole(...roles: AuthUser['role'][]) {
-  return (req: AuthRequest, res: Response, next: NextFunction): void => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Not authenticated' });
-      return;
+export function requireRole(roles: string[]): preHandlerHookHandler {
+  return async (req, reply) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return reply.status(403).send({ error: 'forbidden' });
     }
-    if (!roles.includes(req.user.role)) {
-      res.status(403).json({ error: 'Insufficient permissions' });
-      return;
-    }
-    next();
   };
 }

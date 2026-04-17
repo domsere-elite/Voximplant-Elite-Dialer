@@ -1,424 +1,251 @@
+// Elite Dialer — Prisma Schema
+// Thin dialer-only schema. Account, payment, and compliance data live in the CRM.
+// See docs/superpowers/specs/2026-04-16-elite-dialer-design.md Section 4.
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// =============================================================================
-// Users & Authentication
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
 
-model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  role         String   @default("agent") // agent, supervisor, admin
-  status       String   @default("offline") // available, busy, on_call, wrap_up, offline, break
-  extension    String?
-  isActive     Boolean  @default(true)
-  lastLoginAt  DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  // Relations
-  calls               Call[]              @relation("AgentCalls")
-  campaignsCreated    Campaign[]          @relation("CampaignCreator")
-  reservedContacts    CampaignContact[]   @relation("ContactReserver")
-  callbacks           Callback[]
-  dncEntries          DNCEntry[]          @relation("DNCAddedBy")
-  complianceLogs      ComplianceLog[]     @relation("ComplianceAgent")
-
-  @@index([role, status])
-  @@index([email])
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
 }
 
-// =============================================================================
-// Campaigns
-// =============================================================================
+enum DialMode {
+  MANUAL
+  PREVIEW
+  PROGRESSIVE
+  PREDICTIVE
+}
+
+enum CallerIdStrategy {
+  FIXED
+  ROTATION
+  PROXIMITY
+}
+
+enum AgentStatus {
+  AVAILABLE
+  ON_CALL
+  WRAP_UP
+  BREAK
+  OFFLINE
+}
+
+enum ContactStatus {
+  PENDING
+  COMPLIANCE_BLOCKED
+  DIALING
+  CONNECTED
+  COMPLETED
+  FAILED
+  MAX_ATTEMPTS
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
 
 model Campaign {
-  id                  String    @id @default(uuid())
-  name                String
-  description         String?
-  status              String    @default("draft") // draft, active, paused, completed, archived
-  dialMode            String    @default("preview") // manual, preview, progressive, predictive, ai
-  timezone            String    @default("America/Chicago")
+  id                 String           @id @default(uuid()) @db.Uuid
+  name               String
+  crmCampaignId      String?          @map("crm_campaign_id")
+  status             CampaignStatus   @default(DRAFT)
+  dialMode           DialMode         @map("dial_mode")
+  autoAnswer         Boolean          @default(false) @map("auto_answer")
+  voximplantQueueId  Int?             @map("voximplant_queue_id")
+  voximplantListId   Int?             @map("voximplant_list_id")
+  scheduleStart      DateTime?        @map("schedule_start")
+  scheduleEnd        DateTime?        @map("schedule_end")
+  dialingHoursStart  String           @default("08:00") @map("dialing_hours_start")
+  dialingHoursEnd    String           @default("21:00") @map("dialing_hours_end")
+  timezone           String           @default("America/Chicago")
+  maxConcurrentCalls Int              @default(10) @map("max_concurrent_calls")
+  maxAbandonRate     Float            @default(0.03) @map("max_abandon_rate")
+  dialRatio          Float            @default(1.2) @map("dial_ratio")
+  maxAttempts        Int              @default(3) @map("max_attempts")
+  retryDelayMinutes  Int              @default(60) @map("retry_delay_minutes")
+  didGroupId         String?          @map("did_group_id") @db.Uuid
+  callerIdStrategy   CallerIdStrategy @default(ROTATION) @map("caller_id_strategy")
+  fixedCallerId      String?          @map("fixed_caller_id")
+  amdEnabled         Boolean          @default(true) @map("amd_enabled")
+  voicemailDropUrl   String?          @map("voicemail_drop_url")
+  totalContacts      Int              @default(0) @map("total_contacts")
+  totalDialed        Int              @default(0) @map("total_dialed")
+  totalConnected     Int              @default(0) @map("total_connected")
+  totalVoicemail     Int              @default(0) @map("total_voicemail")
+  createdBy          String           @map("created_by") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
 
-  // Dialer configuration
-  maxConcurrentCalls  Int       @default(10)
-  dialRatio           Float     @default(1.2)
-  maxAttemptsPerLead  Int       @default(3)
-  retryDelaySeconds   Int       @default(3600)
-
-  // AI configuration (when dialMode = 'ai')
-  aiAgentPrompt       String?   @db.Text
-  aiVoice             String?
-  aiTransferEnabled   Boolean   @default(true)
-
-  // Caller ID strategy
-  callerIdStrategy    String    @default("fixed") // fixed, rotation, proximity
-  fixedCallerId       String?
-
-  // Voximplant Call List integration
-  voximplantListId     Int?
-  voximplantListStatus String?   // processing, stopped, completed
-
-  // Timing
-  startedAt           DateTime?
-  completedAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-
-  // Relations
-  createdById         String
-  createdBy           User       @relation("CampaignCreator", fields: [createdById], references: [id])
-  contacts            CampaignContact[]
-  lists               CampaignList[]
-  attempts            CampaignAttempt[]
-  calls               Call[]
-  didGroups           CampaignDIDGroup[]
+  didGroup        DIDGroup?         @relation(fields: [didGroupId], references: [id], onDelete: SetNull)
+  contacts        CampaignContact[]
+  callEvents      CallEvent[]
+  agentMappings   AgentMapping[]
+  agentStatusLogs AgentStatusLog[]
 
   @@index([status])
-  @@index([createdById])
+  @@index([dialMode])
+  @@index([crmCampaignId])
+  @@map("campaigns")
 }
 
-model CampaignList {
-  id            String   @id @default(uuid())
-  name          String
-  campaignId    String
-  totalContacts Int      @default(0)
-  createdAt     DateTime @default(now())
+model AgentMapping {
+  id                 String      @id @default(uuid()) @db.Uuid
+  crmUserId          String      @unique @map("crm_user_id")
+  crmEmail           String      @unique @map("crm_email")
+  crmRole            String      @map("crm_role")
+  voximplantUserId   Int         @unique @map("voximplant_user_id")
+  voximplantUsername String      @unique @map("voximplant_username")
+  status             AgentStatus @default(OFFLINE)
+  currentCallId      String?     @map("current_call_id")
+  currentCampaignId  String?     @map("current_campaign_id") @db.Uuid
+  skills             String[]    @default([])
+  createdAt          DateTime    @default(now()) @map("created_at")
+  updatedAt          DateTime    @updatedAt @map("updated_at")
 
-  campaign Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contacts CampaignContact[]
-
-  @@index([campaignId])
-}
-
-model CampaignContact {
-  id              String    @id @default(uuid())
-  campaignId      String
-  listId          String?
-  phone           String
-  firstName       String?
-  lastName        String?
-  accountNumber   String?
-  debtAmount      Float?
-  timezone        String?
-  status          String    @default("pending") // pending, reserved, dialing, completed, failed, skipped
-  priority        Int       @default(0)
-  attempts        Int       @default(0)
-  lastAttemptAt   DateTime?
-  nextAttemptAfter DateTime @default(now())
-  reservedById    String?
-  reservedAt      DateTime?
-  metadata        Json      @default("{}")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  campaign        Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  list            CampaignList?    @relation(fields: [listId], references: [id])
-  reservedBy      User?            @relation("ContactReserver", fields: [reservedById], references: [id])
-  campaignAttempts CampaignAttempt[]
-  calls           Call[]           @relation("ContactCalls")
-  callbacks       Callback[]
-  regfTrackers    RegFTracker[]
-  paymentArrangements PaymentArrangement[]
-
-  @@index([campaignId, status])
-  @@index([phone])
-  @@index([accountNumber])
-  @@index([nextAttemptAfter])
-}
-
-model CampaignAttempt {
-  id          String   @id @default(uuid())
-  campaignId  String
-  contactId   String
-  callId      String?
-  outcome     String   // answered, no_answer, busy, voicemail, failed, machine, dnc_blocked, tcpa_blocked, regf_blocked
-  duration    Int      @default(0)
-  createdAt   DateTime @default(now())
-
-  campaign Campaign         @relation(fields: [campaignId], references: [id])
-  contact  CampaignContact  @relation(fields: [contactId], references: [id])
-
-  @@index([campaignId])
-  @@index([contactId])
-}
-
-// =============================================================================
-// Calls
-// =============================================================================
-
-model Call {
-  id              String    @id @default(uuid())
-  direction       String    // inbound, outbound
-  status          String    @default("initiated") // initiated, ringing, in_progress, completed, failed, no_answer
-  callMode        String    @default("agent") // agent, ai
-  fromNumber      String
-  toNumber        String
-  providerCallId  String?
-  duration        Int?
-  answeredAt      DateTime?
-  endedAt         DateTime?
-  hangupReason    String?
-  amdResult       String?   // human, machine, unknown
-  dispositionCode String?
-  notes           String?   @db.Text
-  transferReason  String?
-
-  // AI call data
-  aiSummary       String?   @db.Text
-  aiOutcome       String?   // payment_promised, callback_requested, refused, escalated, no_contact
-  aiSentiment     String?   // positive, neutral, negative, hostile
-
-  // Relations
-  agentId         String?
-  campaignId      String?
-  contactId       String?
-  agent           User?             @relation("AgentCalls", fields: [agentId], references: [id])
-  campaign        Campaign?         @relation(fields: [campaignId], references: [id])
-  contact         CampaignContact?  @relation("ContactCalls", fields: [contactId], references: [id])
-  events          CallEvent[]
-  recordings      CallRecording[]
-  transcripts     CallTranscript[]
-  callbacks       Callback[]
-  paymentArrangements PaymentArrangement[]
-
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  currentCampaign Campaign?        @relation(fields: [currentCampaignId], references: [id], onDelete: SetNull)
+  callEvents      CallEvent[]
+  statusLogs      AgentStatusLog[]
 
   @@index([status])
-  @@index([agentId])
-  @@index([campaignId])
-  @@index([contactId])
-  @@index([direction, createdAt])
-}
-
-model CallEvent {
-  id        String   @id @default(uuid())
-  callId    String
-  event     String
-  details   Json     @default("{}")
-  createdAt DateTime @default(now())
-
-  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
-
-  @@index([callId, createdAt])
-}
-
-model CallRecording {
-  id        String   @id @default(uuid())
-  callId    String
-  url       String
-  duration  Int      @default(0)
-  format    String   @default("mp3")
-  createdAt DateTime @default(now())
-
-  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
-
-  @@index([callId])
-}
-
-model CallTranscript {
-  id        String   @id @default(uuid())
-  callId    String
-  content   String   @db.Text
-  provider  String   @default("voximplant")
-  createdAt DateTime @default(now())
-
-  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
-
-  @@index([callId])
-}
-
-// =============================================================================
-// Callbacks
-// =============================================================================
-
-model Callback {
-  id          String    @id @default(uuid())
-  callId      String?
-  contactId   String
-  agentId     String
-  phone       String
-  scheduledAt DateTime
-  completedAt DateTime?
-  status      String    @default("pending") // pending, completed, missed, cancelled
-  createdAt   DateTime  @default(now())
-
-  call    Call?            @relation(fields: [callId], references: [id])
-  contact CampaignContact  @relation(fields: [contactId], references: [id])
-  agent   User             @relation(fields: [agentId], references: [id])
-
-  @@index([agentId, scheduledAt])
-  @@index([status])
-}
-
-// =============================================================================
-// Phone Numbers & DID Management
-// =============================================================================
-
-model PhoneNumber {
-  id            String   @id @default(uuid())
-  number        String   @unique
-  areaCode      String?
-  state         String?
-  provider      String   @default("voximplant")
-  voximplantId  String?  // Voximplant phone number ID
-  isActive      Boolean  @default(true)
-  healthScore   Int      @default(100) // 0-100, decreases with spam flags
-  dailyCallCount Int     @default(0)
-  dailyCallLimit Int     @default(100)
-  lastUsedAt    DateTime?
-  cooldownUntil DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  didGroupLinks DIDGroupNumber[]
-
-  @@index([areaCode])
-  @@index([isActive, healthScore])
+  @@index([crmEmail])
+  @@map("agent_mappings")
 }
 
 model DIDGroup {
-  id        String   @id @default(uuid())
+  id        String   @id @default(uuid()) @db.Uuid
   name      String
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
 
-  numbers   DIDGroupNumber[]
-  campaigns CampaignDIDGroup[]
+  phoneNumbers PhoneNumber[]
+  campaigns    Campaign[]
+
+  @@map("did_groups")
 }
 
-model DIDGroupNumber {
-  id        String @id @default(uuid())
-  groupId   String
-  numberId  String
+model PhoneNumber {
+  id                 String    @id @default(uuid()) @db.Uuid
+  number             String    @unique
+  voximplantNumberId Int?      @map("voximplant_number_id")
+  didGroupId         String?   @map("did_group_id") @db.Uuid
+  areaCode           String    @map("area_code")
+  state              String?
+  isActive           Boolean   @default(true) @map("is_active")
+  healthScore        Int       @default(100) @map("health_score")
+  dailyCallCount     Int       @default(0) @map("daily_call_count")
+  dailyCallLimit     Int       @default(100) @map("daily_call_limit")
+  lastUsedAt         DateTime? @map("last_used_at")
+  cooldownUntil      DateTime? @map("cooldown_until")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  group  DIDGroup    @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  number PhoneNumber @relation(fields: [numberId], references: [id], onDelete: Cascade)
+  didGroup DIDGroup? @relation(fields: [didGroupId], references: [id], onDelete: SetNull)
 
-  @@unique([groupId, numberId])
+  @@index([didGroupId])
+  @@index([areaCode])
+  @@index([isActive, healthScore])
+  @@map("phone_numbers")
 }
 
-model CampaignDIDGroup {
-  id         String @id @default(uuid())
-  campaignId String
-  groupId    String
+model CampaignContact {
+  id                    String        @id @default(uuid()) @db.Uuid
+  campaignId            String        @map("campaign_id") @db.Uuid
+  crmAccountId          String        @map("crm_account_id")
+  phone                 String
+  timezone              String?
+  status                ContactStatus @default(PENDING)
+  priority              Int           @default(0)
+  attempts              Int           @default(0)
+  lastAttemptAt         DateTime?     @map("last_attempt_at")
+  lastOutcome           String?       @map("last_outcome")
+  nextAttemptAfter      DateTime      @default(now()) @map("next_attempt_after")
+  complianceCleared     Boolean       @default(false) @map("compliance_cleared")
+  complianceBlockReason String?       @map("compliance_block_reason")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
 
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  group    DIDGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  campaign   Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  callEvents CallEvent[]
 
-  @@unique([campaignId, groupId])
-}
-
-// =============================================================================
-// Compliance
-// =============================================================================
-
-model DNCEntry {
-  id        String   @id @default(uuid())
-  phone     String   @unique
-  reason    String?
-  source    String   @default("manual") // manual, consumer_request, national_registry
-  addedById String?
-  addedBy   User?    @relation("DNCAddedBy", fields: [addedById], references: [id])
-  createdAt DateTime @default(now())
-
+  @@unique([campaignId, phone])
+  @@index([campaignId, status, nextAttemptAfter])
+  @@index([crmAccountId])
   @@index([phone])
+  @@map("campaign_contacts")
 }
 
-// Reg F: Track call frequency per debt (7 calls per 7-day window)
-model RegFTracker {
-  id         String   @id @default(uuid())
-  contactId  String
-  callId     String
-  calledAt   DateTime @default(now())
+model CallEvent {
+  id                 String        @id @default(uuid()) @db.Uuid
+  voximplantCallId   String        @map("voximplant_call_id")
+  campaignId         String?       @map("campaign_id") @db.Uuid
+  contactId          String?       @map("contact_id") @db.Uuid
+  agentMappingId     String?       @map("agent_mapping_id") @db.Uuid
+  crmAccountId       String?       @map("crm_account_id")
+  direction          CallDirection
+  fromNumber         String        @map("from_number")
+  toNumber           String        @map("to_number")
+  status             String
+  amdResult          String?       @map("amd_result")
+  durationSeconds    Int?          @map("duration_seconds")
+  recordingUrl       String?       @map("recording_url")
+  dispositionCode    String?       @map("disposition_code")
+  hangupReason       String?       @map("hangup_reason")
+  voximplantMetadata Json          @default("{}") @map("voximplant_metadata")
+  crmSynced          Boolean       @default(false) @map("crm_synced")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
 
-  contact CampaignContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign     Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contact      CampaignContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  agentMapping AgentMapping?    @relation(fields: [agentMappingId], references: [id], onDelete: SetNull)
 
-  @@index([contactId, calledAt])
+  @@index([voximplantCallId])
+  @@index([campaignId, createdAt])
+  @@index([agentMappingId, createdAt])
+  @@index([crmSynced])
+  @@map("call_events")
 }
 
-// Audit trail for all compliance checks
-model ComplianceLog {
-  id         String   @id @default(uuid())
-  checkType  String   // dnc, tcpa, reg_f, consent
-  result     String   // allowed, blocked
-  phone      String?
-  contactId  String?
-  agentId    String?
-  details    Json     @default("{}")
-  createdAt  DateTime @default(now())
+model AgentStatusLog {
+  id              String    @id @default(uuid()) @db.Uuid
+  agentMappingId  String    @map("agent_mapping_id") @db.Uuid
+  status          String
+  startedAt       DateTime  @map("started_at")
+  endedAt         DateTime? @map("ended_at")
+  durationSeconds Int?      @map("duration_seconds")
+  campaignId      String?   @map("campaign_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
 
-  agent User? @relation("ComplianceAgent", fields: [agentId], references: [id])
+  agentMapping AgentMapping @relation(fields: [agentMappingId], references: [id], onDelete: Cascade)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
-  @@index([checkType, createdAt])
-  @@index([phone])
-}
-
-// =============================================================================
-// AI & Payment Tracking (new — not in EliteDial)
-// =============================================================================
-
-model PaymentArrangement {
-  id           String    @id @default(uuid())
-  callId       String
-  contactId    String
-  amount       Float?
-  promisedDate DateTime?
-  status       String    @default("promised") // promised, confirmed, broken, completed
-  confirmedAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  call    Call             @relation(fields: [callId], references: [id])
-  contact CampaignContact  @relation(fields: [contactId], references: [id])
-
-  @@index([contactId])
-  @@index([status])
-}
-
-// =============================================================================
-// Voicemails
-// =============================================================================
-
-model Voicemail {
-  id            String    @id @default(uuid())
-  fromNumber    String
-  toNumber      String
-  recordingUrl  String?
-  transcription String?   @db.Text
-  duration      Int       @default(0)
-  isRead        Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-
-  @@index([isRead, createdAt])
-}
-
-// =============================================================================
-// System Configuration
-// =============================================================================
-
-model DispositionCode {
-  id               String  @id @default(uuid())
-  code             String  @unique
-  label            String
-  category         String? // positive, negative, neutral, callback
-  requiresCallback Boolean @default(false)
-  isActive         Boolean @default(true)
-  sortOrder        Int     @default(0)
+  @@index([agentMappingId, startedAt])
+  @@index([campaignId, startedAt])
+  @@map("agent_status_log")
 }
 
 model SystemSetting {
   key       String   @id
   value     String
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
 }
