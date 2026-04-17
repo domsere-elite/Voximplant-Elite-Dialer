@@ -112,7 +112,7 @@ export class CampaignEngine {
     const applicationId = Number(config.voximplant.applicationId) || 0;
 
     const list = await this.vox.createCallList({
-      ruleId: 1, // TODO: Configure rule for outbound-pds scenario
+      ruleId: config.voximplant.outboundPdsRuleId,
       priority: 1,
       maxSimultaneous: campaign.maxConcurrentCalls,
       numAttempts: campaign.maxAttempts,
