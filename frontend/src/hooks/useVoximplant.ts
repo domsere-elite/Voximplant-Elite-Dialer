@@ -161,7 +161,16 @@ export function useVoximplant(): UseVoximplantReturn {
 
       const onEstablished = async () => {
         try {
-          await client.loginWithOneTimeKey(voximplantUser.username, voximplantUser.oneTimeKey);
+          const fullUser = voximplantUser.username.includes('@')
+            ? voximplantUser.username
+            : `${voximplantUser.username}@${voximplantUser.applicationName}.${voximplantUser.accountName}.voximplant.com`;
+          if (voximplantUser.oneTimeKey) {
+            await client.loginWithOneTimeKey(fullUser, voximplantUser.oneTimeKey);
+          } else if (voximplantUser.password) {
+            await client.login(fullUser, voximplantUser.password);
+          } else {
+            throw new Error('No Voximplant credentials (oneTimeKey or password)');
+          }
           if (mountedRef.current) setSdkState('ready');
         } catch (err: any) {
           if (mountedRef.current) {

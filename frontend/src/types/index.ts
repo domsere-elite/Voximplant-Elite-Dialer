@@ -11,7 +11,8 @@ export interface User {
 
 export interface VoximplantUser {
   username: string;
-  oneTimeKey: string;
+  oneTimeKey?: string;
+  password?: string;
   applicationName: string;
   accountName: string;
 }
